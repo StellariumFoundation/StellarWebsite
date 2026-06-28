@@ -6,6 +6,7 @@
   import QuizScreen from './screens/QuizScreen.svelte';
   import SponsorScreen from './screens/SponsorScreen.svelte';
   import ContactScreen from './screens/ContactScreen.svelte';
+  import AudioControl from './components/AudioControl.svelte';
 
   let location = $state(window.location.pathname);
 
@@ -100,6 +101,8 @@
     <div class={matchRoute('/sponsor') ? 'h-full' : 'hidden'}><SponsorScreen onContact={() => navigate('/contact')} /></div>
     <div class={matchRoute('/contact') ? 'h-full' : 'hidden'}><ContactScreen /></div>
   </div>
+
+  <AudioControl />
 
   <div class="bg-black/70 backdrop-blur-md border-t border-white/5 safe-bottom z-50">
     <div class="flex justify-around items-center h-16 md:h-20 lg:h-24 px-2 max-w-lg md:max-w-3xl lg:max-w-5xl mx-auto">
