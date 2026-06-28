@@ -12,8 +12,13 @@ const CORS_HEADERS = {
   'Access-Control-Allow-Headers': 'Content-Type',
 };
 
-let callerController: ReadableStreamDefaultController<Uint8Array> | null = null;
-let calleeController: ReadableStreamDefaultController<Uint8Array> | null = null;
+interface StreamPair {
+  readable: ReadableStream<Uint8Array>;
+  writable: WritableStream<Uint8Array>;
+}
+
+let callerPair: StreamPair | null = null;
+let calleePair: StreamPair | null = null;
 let callActive = false;
 
 const encoder = new TextEncoder();
@@ -35,13 +40,28 @@ function encodeControl(type: string): Uint8Array {
   buf[0] = 0;
   buf.set(len, 1);
   buf.set(text, 5);
-  log('encodeControl', type, json.length, 'bytes');
+  log('encodeControl:', type, '-', text.length, 'bytes');
   return buf;
 }
 
-function forwardAudio(controller: ReadableStreamDefaultController<Uint8Array> | null, data: Uint8Array) {
-  if (!controller) {
-    log('forwardAudio: no controller, dropping', data.length, 'bytes');
+async function writeFrame(writable: WritableStream<Uint8Array> | null, frame: Uint8Array) {
+  if (!writable) {
+    log('writeFrame: no writable, dropping frame');
+    return;
+  }
+  try {
+    const writer = writable.getWriter();
+    await writer.write(frame);
+    writer.releaseLock();
+    log('writeFrame: wrote', frame.length, 'bytes');
+  } catch (e) {
+    log('writeFrame: write failed:', e);
+  }
+}
+
+function forwardAudio(writable: WritableStream<Uint8Array> | null, data: Uint8Array) {
+  if (!writable) {
+    log('forwardAudio: no writable, dropping', data.length, 'bytes');
     return;
   }
   try {
@@ -50,67 +70,37 @@ function forwardAudio(controller: ReadableStreamDefaultController<Uint8Array> | 
     buf[0] = 1;
     buf.set(len, 1);
     buf.set(data, 5);
-    controller.enqueue(buf);
-    log('forwardAudio: enqueued', data.length, 'bytes');
+    writeFrame(writable, buf);
+    log('forwardAudio: forwarded', data.length, 'bytes');
   } catch (e) {
-    log('forwardAudio: enqueue failed:', e);
+    log('forwardAudio: error:', e);
   }
 }
 
-function hangupAll() {
+async function hangupAll() {
   log('hangupAll: starting');
-  [callerController, calleeController].forEach((ctrl, i) => {
-    if (ctrl) {
-      try {
-        ctrl.enqueue(encodeControl('hangup'));
-        ctrl.close();
-        log('hangupAll: closed controller', i);
-      } catch (e) {
-        log('hangupAll: error closing controller', i, e);
-      }
-    }
-  });
-  callerController = null;
-  calleeController = null;
+  const hangup = encodeControl('hangup');
+  if (callerPair) {
+    await writeFrame(callerPair.writable, hangup);
+    await callerPair.writable.close();
+    log('hangupAll: closed caller writable');
+  }
+  if (calleePair) {
+    await writeFrame(calleePair.writable, hangup);
+    await calleePair.writable.close();
+    log('hangupAll: closed callee writable');
+  }
+  callerPair = null;
+  calleePair = null;
   callActive = false;
   log('hangupAll: done, callActive=false');
 }
 
-function makeStream(label: string): ReadableStream<Uint8Array> {
-  log('makeStream: creating stream for', label);
-  let controller: ReadableStreamDefaultController<Uint8Array> | null = null;
-  const stream = new ReadableStream({
-    start(ctrl) {
-      controller = ctrl;
-      log('makeStream: stream started, controller assigned for', label);
-      if (label === 'caller') {
-        callerController = ctrl;
-        log('makeStream: callerController set');
-        if (calleeController) {
-          log('makeStream: callee already connected, sending incoming_call');
-          try { calleeController.enqueue(encodeControl('incoming_call')); } catch (e) {
-            log('makeStream: incoming_call enqueue failed:', e);
-          }
-        }
-      } else if (label === 'callee') {
-        calleeController = ctrl;
-        log('makeStream: calleeController set');
-      }
-    },
-    cancel() {
-      log('makeStream: stream cancelled for', label);
-      if (label === 'caller') {
-        callerController = null;
-        log('makeStream: callerController cleared');
-        if (callActive) hangupAll();
-      } else if (label === 'callee') {
-        calleeController = null;
-        log('makeStream: calleeController cleared');
-        if (callActive) hangupAll();
-      }
-    }
-  });
-  return stream;
+function makeStreamPair(label: string): StreamPair {
+  log('makeStreamPair: creating', label);
+  const ts = new TransformStream<Uint8Array>();
+  log('makeStreamPair: created', label, 'TransformStream');
+  return { readable: ts.readable, writable: ts.writable };
 }
 
 function respond(body: string | ReadableStream<Uint8Array>, status = 200): Response {
@@ -118,7 +108,7 @@ function respond(body: string | ReadableStream<Uint8Array>, status = 200): Respo
   if (body instanceof ReadableStream) {
     headers['Content-Type'] = 'application/octet-stream';
   }
-  log('respond: status=' + status + ' type=' + (typeof body));
+  log('respond:', status, typeof body);
   return new Response(body, { status, headers });
 }
 
@@ -132,123 +122,105 @@ Bun.serve({
     log(`--> ${method} ${url.pathname} from ${ip}`);
 
     try {
-      // CORS preflight
       if (method === 'OPTIONS') {
         log('OPTIONS: returning CORS headers');
         return new Response(null, { headers: CORS_HEADERS });
       }
 
-      // ---- CALLER endpoints ----
+      // ---- CALLER ----
 
       if (url.pathname === '/caller' && method === 'GET') {
-        if (callerController) {
-          log('GET /caller: conflict, caller already connected');
+        if (callerPair) {
+          log('GET /caller: conflict');
           return respond('Call already in progress', 409);
         }
-        log('GET /caller: creating caller stream');
-        return respond(makeStream('caller'));
+        callerPair = makeStreamPair('caller');
+        log('GET /caller: callerPair set, notifying callee if connected');
+        if (calleePair) {
+          writeFrame(calleePair.writable, encodeControl('incoming_call'));
+        }
+        return respond(callerPair.readable);
       }
 
       if (url.pathname === '/caller' && method === 'POST') {
-        if (!req.body) {
-          log('POST /caller: no body');
-          return respond('No body', 400);
-        }
+        if (!req.body) return respond('No body', 400);
         log('POST /caller: reading body');
         const reader = req.body.getReader();
-        (async () => {
-          let totalBytes = 0;
-          while (true) {
-            const { done, value } = await reader.read();
-            if (done) {
-              log('POST /caller: done reading, total', totalBytes, 'bytes forwarded to callee');
-              break;
-            }
-            totalBytes += value.length;
-            log('POST /caller: read chunk', value.length, 'bytes (total', totalBytes + ')');
-            if (callActive) {
-              forwardAudio(calleeController, value);
-            } else {
-              log('POST /caller: call not active, dropping chunk');
-            }
+        let totalBytes = 0;
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) {
+            log('POST /caller: done reading, total', totalBytes, 'bytes');
+            break;
           }
-        })();
-        log('POST /caller: returning ok');
+          totalBytes += value.length;
+          log('POST /caller: chunk', value.length, 'bytes (total', totalBytes + ')');
+          if (callActive) {
+            forwardAudio(calleePair?.writable ?? null, value);
+          } else {
+            log('POST /caller: call not active, dropping chunk');
+          }
+        }
         return respond('ok');
       }
 
       if (url.pathname === '/caller' && method === 'DELETE') {
-        log('DELETE /caller: hanging up');
-        hangupAll();
+        log('DELETE /caller');
+        await hangupAll();
         return respond('ok');
       }
 
-      // ---- CALLEE endpoints ----
+      // ---- CALLEE ----
 
       if (url.pathname === '/callee' && method === 'GET') {
-        if (calleeController) {
-          log('GET /callee: conflict, callee already connected');
+        if (calleePair) {
+          log('GET /callee: conflict');
           return respond('Already connected', 409);
         }
-        log('GET /callee: creating callee stream');
-        return respond(makeStream('callee'));
+        calleePair = makeStreamPair('callee');
+        log('GET /callee: calleePair set');
+        return respond(calleePair.readable);
       }
 
       if (url.pathname === '/callee' && method === 'POST') {
-        if (!req.body) {
-          log('POST /callee: no body');
-          return respond('No body', 400);
-        }
+        if (!req.body) return respond('No body', 400);
 
         if (!callActive) {
           log('POST /callee: first POST -> answering call');
           callActive = true;
-          if (callerController) {
-            try {
-              callerController.enqueue(encodeControl('call_answered'));
-              log('POST /callee: sent call_answered to caller');
-            } catch (e) {
-              log('POST /callee: call_answered enqueue failed:', e);
-            }
-          } else {
-            log('POST /callee: no callerController to send call_answered');
+          if (callerPair) {
+            await writeFrame(callerPair.writable, encodeControl('call_answered'));
+            log('POST /callee: sent call_answered to caller');
           }
-        } else {
-          log('POST /callee: call already active');
         }
 
         log('POST /callee: reading body');
         const reader = req.body.getReader();
-        (async () => {
-          let totalBytes = 0;
-          while (true) {
-            const { done, value } = await reader.read();
-            if (done) {
-              log('POST /callee: done reading, total', totalBytes, 'bytes forwarded to caller');
-              break;
-            }
-            totalBytes += value.length;
-            log('POST /callee: read chunk', value.length, 'bytes (total', totalBytes + ')');
-            forwardAudio(callerController, value);
+        let totalBytes = 0;
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) {
+            log('POST /callee: done reading, total', totalBytes, 'bytes');
+            break;
           }
-        })();
+          totalBytes += value.length;
+          log('POST /callee: chunk', value.length, 'bytes (total', totalBytes + ')');
+          forwardAudio(callerPair?.writable ?? null, value);
+        }
         return respond('ok');
       }
 
       if (url.pathname === '/callee' && method === 'DELETE') {
-        log('DELETE /callee: hanging up');
-        hangupAll();
+        log('DELETE /callee');
+        await hangupAll();
         return respond('ok');
       }
 
-      log('404: unknown path', url.pathname);
+      log('404:', url.pathname);
       return respond('Not found', 404);
     } catch (e) {
-      log('ERROR in fetch handler:', e);
-      return new Response('Internal Server Error', {
-        status: 500,
-        headers: CORS_HEADERS
-      });
+      log('ERROR:', e);
+      return new Response('Internal Server Error', { status: 500, headers: CORS_HEADERS });
     }
   }
 });
