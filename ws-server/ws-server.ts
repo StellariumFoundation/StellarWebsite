@@ -213,18 +213,18 @@ app.get('/caller', (c) => {
 
 app.post('/caller', async (c) => {
   const body = c.req.raw.body;
-  if (!body) {
-    log('CALLER-POST', 'no body');
-    return c.text('No body', 400);
+  log('CALLER-POST', 'body present:', !!body, stateLabel());
+  if (body) {
+    await readBody('POST/caller', body, (data) => {
+      if (callActive) {
+        forwardAudio('POST/caller', calleePair?.writable ?? null, data);
+      } else {
+        log('AUDIO', 'POST/caller: call not active, dropping', data.length, 'bytes');
+      }
+    });
+  } else {
+    log('CALLER-POST', 'no body, nothing to forward');
   }
-  log('CALLER-POST', 'reading body', stateLabel());
-  await readBody('POST/caller', body, (data) => {
-    if (callActive) {
-      forwardAudio('POST/caller', calleePair?.writable ?? null, data);
-    } else {
-      log('AUDIO', 'POST/caller: call not active, dropping', data.length, 'bytes');
-    }
-  });
   return c.text('ok');
 });
 
@@ -257,12 +257,7 @@ app.get('/callee', (c) => {
 
 app.post('/callee', async (c) => {
   const body = c.req.raw.body;
-  if (!body) {
-    log('CALLEE-POST', 'no body');
-    return c.text('No body', 400);
-  }
-
-  log('CALLEE-POST', 'reading body', stateLabel());
+  log('CALLEE-POST', 'body present:', !!body, stateLabel());
 
   if (!callActive) {
     log('CALLEE-POST', 'FIRST POST - answering call');
@@ -277,9 +272,13 @@ app.post('/callee', async (c) => {
     log('CALLEE-POST', 'call already active, this is audio data');
   }
 
-  await readBody('POST/callee', body, (data) => {
-    forwardAudio('POST/callee', callerPair?.writable ?? null, data);
-  });
+  if (body) {
+    await readBody('POST/callee', body, (data) => {
+      forwardAudio('POST/callee', callerPair?.writable ?? null, data);
+    });
+  } else {
+    log('CALLEE-POST', 'no body (empty answer signal)');
+  }
   return c.text('ok');
 });
 
