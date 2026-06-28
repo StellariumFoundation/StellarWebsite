@@ -8,16 +8,21 @@
   let statusText = $state('');
   let statusType: 'success' | 'error' | 'info' | '' = $state('');
   let portalCopied = $state(false);
+  import { opusStream } from '../lib/OpusStream';
+
   let callState = $state<'idle' | 'calling' | 'in_call' | 'ended' | 'no_answer' | 'failed'>('idle');
   let callErrorText = $state('');
   let isPTT = $state(false);
+  let isRecording = $state(false);
 
   $effect(() => {
     const unsub1 = callClient.callState.subscribe((v) => callState = v);
     const unsub2 = callClient.errorText.subscribe((v) => callErrorText = v);
+    const unsub3 = opusStream.recording.subscribe((v) => isRecording = v);
     return () => {
       unsub1();
       unsub2();
+      unsub3();
     };
   });
 
@@ -125,10 +130,10 @@
             onmousedown={() => { isPTT = true; callClient.startTransmitting(); }}
             onmouseup={() => { isPTT = false; callClient.stopTransmitting(); }}
             onmouseleave={() => { if (isPTT) { isPTT = false; callClient.stopTransmitting(); } }}
-            class="w-full py-6 rounded-xl flex items-center justify-center gap-2 uppercase tracking-wider text-sm font-bold transition-all select-none active:scale-[0.98] {isPTT ? 'bg-emerald-500 text-black shadow-[0_0_30px_rgba(16,185,129,0.5)]' : 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 hover:bg-emerald-500/30'}"
+            class="w-full py-6 rounded-xl flex items-center justify-center gap-2 uppercase tracking-wider text-sm font-bold transition-all select-none active:scale-[0.98] {isRecording ? 'bg-emerald-500 text-black shadow-[0_0_40px_rgba(16,185,129,0.6)] animate-pulse' : isPTT ? 'bg-emerald-600/60 text-emerald-200 border border-emerald-500/50' : 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 hover:bg-emerald-500/30'}"
           >
-            <Mic size={20} />
-            {isPTT ? 'TRANSMITTING...' : 'HOLD TO TALK'}
+            <Mic size={20} class={isRecording ? 'animate-pulse' : ''} />
+            {isRecording ? 'RECORDING...' : isPTT ? 'INITIALIZING...' : 'HOLD TO TALK'}
           </button>
           
           <button

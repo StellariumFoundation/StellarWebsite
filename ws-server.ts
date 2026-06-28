@@ -58,8 +58,8 @@ Bun.serve({
             case 'call_ended':
             case 'hangup':
               console.log('[WS] hangup received');
-              if (browserSocket) browserSocket.send(JSON.stringify({ type: 'call_ended' }));
-              if (androidSocket) androidSocket.send(JSON.stringify({ type: 'call_ended' }));
+              if (browserSocket) browserSocket.send(JSON.stringify({ type: 'hangup' }));
+              if (androidSocket) androidSocket.send(JSON.stringify({ type: 'hangup' }));
               break;
           }
         } catch (e) {

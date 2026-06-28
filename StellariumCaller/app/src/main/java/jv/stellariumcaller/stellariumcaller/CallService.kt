@@ -14,6 +14,7 @@ import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
+import android.media.AudioManager
 import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
@@ -260,7 +261,7 @@ class CallService : Service() {
                     if (showingIncomingUI || callActive) return
                     showIncomingCallUI()
                 }
-                "hangup" -> {
+                "hangup", "call_ended" -> {
                     showingIncomingUI = false
                     callActive = false
                     stopRingtone()
@@ -272,8 +273,15 @@ class CallService : Service() {
         } catch (_: Exception) { }
     }
 
+    private fun setMaxVolume() {
+        val audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        val maxVol = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+        audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, maxVol, 0)
+    }
+
     private fun showIncomingCallUI() {
         showingIncomingUI = true
+        setMaxVolume()
         playRingtone()
 
         val intent = Intent(this, IncomingCallActivity::class.java).apply {

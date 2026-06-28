@@ -20,6 +20,7 @@ class CallClient {
       case 'call_answered':
         if (this.callTimeout) clearTimeout(this.callTimeout);
         this.callStateWritable.set('in_call');
+        opusStream.initStream().catch((e) => console.error('initStream error:', e));
         break;
       case 'error':
         if (this.callTimeout) clearTimeout(this.callTimeout);
@@ -27,6 +28,7 @@ class CallClient {
         this.errorTextWritable.set(msg.message || 'Call failed');
         break;
       case 'hangup':
+      case 'call_ended':
         if (this.callTimeout) clearTimeout(this.callTimeout);
         this.callStateWritable.set('ended');
         opusStream.stop();
@@ -111,8 +113,6 @@ class CallClient {
       this.callStateWritable.set('failed');
       return;
     }
-
-    opusStream.initDecoder();
 
     this.callStateWritable.set('calling');
 
