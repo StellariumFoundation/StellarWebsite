@@ -100,46 +100,40 @@ function makeTransformStream(label: string): TransformStream<Uint8Array> {
   return ts;
 }
 
-function streamReaderLoop(label: string, reader: ReadableStreamDefaultReader<Uint8Array>, honoStream: any) {
+async function streamReaderLoop(label: string, reader: ReadableStreamDefaultReader<Uint8Array>, honoStream: any) {
   log('STREAM', label, 'reader loop starting');
   let seq = 0;
-  (async () => {
-    try {
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) {
-          log('STREAM', label, 'reader done (stream closed)');
-          break;
-        }
-        seq++;
-        const type = value[0];
-        const size = value.length;
-        log('STREAM', label, `write seq=${seq} type=${type} size=${size}B`);
-        await honoStream.write(value);
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) {
+        log('STREAM', label, 'reader done (stream closed)');
+        break;
       }
-    } catch (e) {
-      log('STREAM', label, 'reader error:', e);
-    } finally {
-      reader.releaseLock();
-      log('STREAM', label, 'reader loop ended, seq=', seq, stateLabel());
-      // Clear the pair immediately (before async cleanup) so new connections aren't rejected
-      if (label === 'caller' && callerPair) {
-        log('STREAM caller: clearing callerPair');
-        callerPair = null;
-        if (callActive) {
-          // Schedule hangup without awaiting to let new connections through
-          hangupAll();
-        }
-      } else if (label === 'callee' && calleePair) {
-        log('STREAM callee: clearing calleePair');
-        calleePair = null;
-        if (callActive) {
-          hangupAll();
-        }
-      }
-      log('STREAM', label, 'cleanup done', stateLabel());
+      seq++;
+      const type = value[0];
+      const size = value.length;
+      log('STREAM', label, `write seq=${seq} type=${type} size=${size}B`);
+      await honoStream.write(value);
+      log('STREAM', label, `write seq=${seq} done`);
     }
-  })();
+  } catch (e) {
+    log('STREAM', label, 'reader error:', e);
+  } finally {
+    reader.releaseLock();
+    log('STREAM', label, 'reader loop ended, seq=', seq, stateLabel());
+    if (label === 'caller' && callerPair) {
+      log('STREAM caller: clearing callerPair');
+      callerPair = null;
+      if (callActive) hangupAll();
+    } else if (label === 'callee' && calleePair) {
+      log('STREAM callee: clearing calleePair');
+      calleePair = null;
+      if (callActive) hangupAll();
+    }
+    log('STREAM', label, 'cleanup done', stateLabel());
+  }
 }
 
 async function readBody(label: string, body: ReadableStream<Uint8Array>, onChunk: (data: Uint8Array) => void) {
