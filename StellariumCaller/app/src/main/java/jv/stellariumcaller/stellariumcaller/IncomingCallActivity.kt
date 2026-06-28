@@ -6,16 +6,15 @@ import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import android.view.WindowManager
-import android.widget.ImageButton
 import android.widget.Toast
-import androidx.activity.enableEdgeToEdge
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
-import androidx.core.view.ViewCompat
-import androidx.core.view.WindowInsetsCompat
+import jv.stellariumcaller.stellariumcaller.ui.screens.IncomingCallScreen
+import jv.stellariumcaller.stellariumcaller.ui.theme.StellariumCallerTheme
 
-class IncomingCallActivity : AppCompatActivity() {
+class IncomingCallActivity : ComponentActivity() {
     private var pendingAnswer = false
     private var callHandled = false
 
@@ -33,40 +32,37 @@ class IncomingCallActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        enableEdgeToEdge()
-        setContentView(R.layout.activity_incoming_call)
-        
-        // Show on lock screen and keep screen on
+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
             setTurnScreenOn(true)
             setShowWhenLocked(true)
         } else {
+            @Suppress("DEPRECATION")
             window.addFlags(WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON or WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED)
         }
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
-        ViewCompat.setOnApplyWindowInsetsListener(findViewById(R.id.incoming_call_root)) { v, insets ->
-            val systemBars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
-            v.setPadding(systemBars.left, systemBars.top, systemBars.right, systemBars.bottom)
-            insets
-        }
-
-        findViewById<ImageButton>(R.id.btn_answer).setOnClickListener {
-            if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
-                == PackageManager.PERMISSION_GRANTED
-            ) {
-                proceedAnswer()
-            } else {
-                pendingAnswer = true
-                requestPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+        setContent {
+            StellariumCallerTheme {
+                IncomingCallScreen(
+                    onAnswer = {
+                        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
+                            == PackageManager.PERMISSION_GRANTED
+                        ) {
+                            proceedAnswer()
+                        } else {
+                            pendingAnswer = true
+                            requestPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                        }
+                    },
+                    onDecline = {
+                        pendingAnswer = false
+                        callHandled = true
+                        CallService.sendEndCall()
+                        finish()
+                    }
+                )
             }
-        }
-
-        findViewById<ImageButton>(R.id.btn_decline).setOnClickListener {
-            pendingAnswer = false
-            callHandled = true
-            CallService.sendEndCall()
-            finish()
         }
     }
 
@@ -83,5 +79,8 @@ class IncomingCallActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
+        if (!callHandled) {
+            CallService.sendEndCall()
+        }
     }
 }

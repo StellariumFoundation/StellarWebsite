@@ -1,19 +1,24 @@
 package jv.stellariumcaller.stellariumcaller
 
-import android.graphics.Color
-import android.media.AudioManager
 import android.os.Bundle
-import android.view.MotionEvent
-import android.view.View
-import android.widget.ImageButton
-import android.widget.TextView
-import androidx.activity.enableEdgeToEdge
-import androidx.appcompat.app.AppCompatActivity
-import androidx.core.view.ViewCompat
-import androidx.core.view.WindowInsetsCompat
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.*
+import androidx.compose.ui.unit.dp
+import androidx.core.view.WindowCompat
+import jv.stellariumcaller.stellariumcaller.ui.screens.ActiveCallScreen
+import jv.stellariumcaller.stellariumcaller.ui.theme.DarkBackground
+import jv.stellariumcaller.stellariumcaller.ui.theme.StellariumCallerTheme
 
-class ActiveCallActivity : AppCompatActivity() {
-
+class ActiveCallActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         if (!CallService.isCallActive()) {
@@ -23,44 +28,40 @@ class ActiveCallActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        enableEdgeToEdge()
-        setContentView(R.layout.activity_active_call)
+        WindowCompat.setDecorFitsSystemWindows(window, false)
 
-        volumeControlStream = AudioManager.STREAM_VOICE_CALL
+        setContent {
+            StellariumCallerTheme {
+                var pttPressed by remember { mutableStateOf(false) }
+                var isRecording by remember { mutableStateOf(false) }
+                val audioManager = getSystemService(AUDIO_SERVICE) as android.media.AudioManager
+                audioManager.setStreamVolume(android.media.AudioManager.STREAM_VOICE_CALL, audioManager.getStreamMaxVolume(android.media.AudioManager.STREAM_VOICE_CALL), 0)
 
-        ViewCompat.setOnApplyWindowInsetsListener(findViewById(R.id.active_call_root)) { v, insets ->
-            val systemBars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
-            v.setPadding(systemBars.left, systemBars.top, systemBars.right, systemBars.bottom)
-            insets
-        }
-
-        val btnPtt = findViewById<ImageButton>(R.id.btn_ptt)
-        val tvPttLabel = findViewById<TextView>(R.id.tv_ptt_label)
-
-        btnPtt.setOnTouchListener { _, event ->
-            when (event.action) {
-                MotionEvent.ACTION_DOWN -> {
-                    btnPtt.setBackgroundColor(Color.parseColor("#059669"))
-                    btnPtt.setImageResource(R.drawable.ic_mic)
-                    tvPttLabel.text = "RECORDING"
-                    tvPttLabel.setTextColor(Color.parseColor("#10B981"))
-                    CallService.startRecordingPTT()
-                    true
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(DarkBackground)
+                ) {
+                    ActiveCallScreen(
+                        pttPressed = pttPressed,
+                        isRecording = isRecording,
+                        onPttDown = {
+                            pttPressed = true
+                            CallService.startRecordingPTT()
+                            isRecording = true
+                        },
+                        onPttUp = {
+                            pttPressed = false
+                            isRecording = false
+                            CallService.stopRecordingPTT()
+                        },
+                        onEndCall = {
+                            CallService.sendEndCall()
+                            finish()
+                        }
+                    )
                 }
-                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                    btnPtt.setBackgroundColor(Color.parseColor("#1a4a3a"))
-                    tvPttLabel.text = "Hold to Talk"
-                    tvPttLabel.setTextColor(Color.parseColor("#34D399"))
-                    CallService.stopRecordingPTT()
-                    true
-                }
-                else -> false
             }
-        }
-
-        findViewById<ImageButton>(R.id.btn_end_call).setOnClickListener {
-            CallService.sendEndCall()
-            finish()
         }
     }
 

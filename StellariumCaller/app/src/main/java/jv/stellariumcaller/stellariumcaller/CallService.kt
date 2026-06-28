@@ -8,17 +8,20 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.media.AudioAttributes
+import android.media.AudioManager
 import android.media.MediaPlayer
 import android.media.MediaRecorder
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
-import android.media.AudioManager
 import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
 import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import okhttp3.*
 import java.io.File
 import java.io.FileInputStream
@@ -43,14 +46,23 @@ class CallService : Service() {
     @Volatile private var shouldRun = true
     @Volatile private var reconnecting = false
 
+    @Volatile private var currentCallId: Long = -1
+
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    private var pingJob: Job? = null
+
+    private val audioStorage by lazy { AudioStorage(this) }
+    private val repo by lazy { CallLogRepository.getInstance(this) }
 
     companion object {
         private const val SERVER_URL = "wss://stellarwebsite-ws.onrender.com/ws"
 
+        private val _connectionFlow = MutableStateFlow(false)
+        val connectionFlow: StateFlow<Boolean> = _connectionFlow.asStateFlow()
+
         @JvmStatic
-        private var instance: CallService? = null
+        var instance: CallService? = null
 
         fun sendAnswer() {
             val svc = instance
@@ -58,6 +70,9 @@ class CallService : Service() {
             svc.showingIncomingUI = false
             svc.stopRingtone()
             svc.callActive = true
+            if (svc.currentCallId >= 0) {
+                svc.repo.updateCallStatus(svc.currentCallId, "answered")
+            }
             svc.restoreNotification()
             svc.webSocket?.send("{\"type\":\"call_accepted\"}")
         }
@@ -66,6 +81,7 @@ class CallService : Service() {
             val svc = instance ?: return
             svc.showingIncomingUI = false
             svc.callActive = false
+            svc.currentCallId = -1
             svc.stopRecording()
             svc.stopPlayback()
             svc.stopRingtone()
@@ -113,6 +129,7 @@ class CallService : Service() {
         webSocket?.close(1000, "Service stopped")
         webSocket = null
         unregisterNetworkMonitor()
+        pingJob?.cancel()
         scope.cancel()
         super.onDestroy()
     }
@@ -177,6 +194,18 @@ class CallService : Service() {
         } ?: false
     }
 
+    private fun startPing() {
+        pingJob?.cancel()
+        pingJob = scope.launch {
+            while (isActive && shouldRun) {
+                delay(60_000)
+                try {
+                    webSocket?.send("{\"type\":\"ping\"}")
+                } catch (_: Exception) { }
+            }
+        }
+    }
+
     private fun connectWebSocket() {
         if (!shouldRun) return
 
@@ -197,13 +226,15 @@ class CallService : Service() {
             .build()
 
         val newSocket = client.newWebSocket(request, object : WebSocketListener() {
-            override fun onOpen(ws: WebSocket, response: Response) {
+            override fun onOpen(webSocket: WebSocket, response: Response) {
                 reconnecting = false
                 reconnectAttempts = 0
-                if (this@CallService.webSocket !== ws) return
+                if (this@CallService.webSocket !== webSocket) return
                 connected = true
+                _connectionFlow.value = true
                 startForeground(serviceId, getServiceNotification())
-                ws.send("{\"type\":\"register\",\"role\":\"android\"}")
+                webSocket.send("{\"type\":\"register\",\"role\":\"android\"}")
+                startPing()
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
@@ -216,23 +247,29 @@ class CallService : Service() {
                 }
             }
 
-            override fun onClosing(ws: WebSocket, code: Int, reason: String) {
-                if (this@CallService.webSocket !== ws) return
+            override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
+                if (this@CallService.webSocket !== webSocket) return
                 connected = false
+                _connectionFlow.value = false
+                pingJob?.cancel()
                 startForeground(serviceId, getServiceNotification())
                 scheduleReconnect()
             }
 
-            override fun onClosed(ws: WebSocket, code: Int, reason: String) {
-                if (this@CallService.webSocket !== ws) return
+            override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+                if (this@CallService.webSocket !== webSocket) return
                 connected = false
+                _connectionFlow.value = false
+                pingJob?.cancel()
                 startForeground(serviceId, getServiceNotification())
                 scheduleReconnect()
             }
 
-            override fun onFailure(ws: WebSocket, t: Throwable, response: Response?) {
-                if (this@CallService.webSocket !== ws) return
+            override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                if (this@CallService.webSocket !== webSocket) return
                 connected = false
+                _connectionFlow.value = false
+                pingJob?.cancel()
                 startForeground(serviceId, getServiceNotification())
                 scheduleReconnect()
             }
@@ -259,11 +296,13 @@ class CallService : Service() {
             when (json.getString("type")) {
                 "incoming_call" -> {
                     if (showingIncomingUI || callActive) return
+                    currentCallId = repo.createCallLog("missed").id
                     showIncomingCallUI()
                 }
                 "hangup", "call_ended" -> {
                     showingIncomingUI = false
                     callActive = false
+                    currentCallId = -1
                     stopRingtone()
                     stopPlayback()
                     stopRecording()
@@ -271,12 +310,6 @@ class CallService : Service() {
                 }
             }
         } catch (_: Exception) { }
-    }
-
-    private fun setMaxVolume() {
-        val audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
-        val maxVol = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
-        audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, maxVol, 0)
     }
 
     private fun showIncomingCallUI() {
@@ -318,7 +351,7 @@ class CallService : Service() {
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setFullScreenIntent(pendingIntent, true)
             .setContentIntent(pendingIntent)
-            .addAction(R.drawable.ic_mic, "Answer", answerPendingIntent)
+            .addAction(android.R.drawable.ic_btn_speak_now, "Answer", answerPendingIntent)
             .addAction(android.R.drawable.ic_menu_close_clear_cancel, "Decline", declinePendingIntent)
             .build()
 
@@ -353,6 +386,12 @@ class CallService : Service() {
         }
     }
 
+    private fun setMaxVolume() {
+        val audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        val maxVol = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+        audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, maxVol, 0)
+    }
+
     private var ringtonePlayer: MediaPlayer? = null
 
     private fun stopRingtone() {
@@ -365,16 +404,13 @@ class CallService : Service() {
 
     private fun playAudio(data: ByteArray) {
         try {
-            val audioDir = File(cacheDir, "stellarium_audio")
-            if (!audioDir.exists()) audioDir.mkdirs()
-
-            val audioFile = File(audioDir, "audio_${System.currentTimeMillis()}.webm")
-            audioFile.writeBytes(data)
+            val filePath = audioStorage.saveAudio(data, "received")
+            repo.addAudioMessage(currentCallId, "received", filePath)
 
             stopPlayback()
 
             MediaPlayer().apply {
-                setDataSource(audioFile.absolutePath)
+                setDataSource(filePath)
                 setAudioAttributes(
                     AudioAttributes.Builder()
                         .setUsage(AudioAttributes.USAGE_MEDIA)
@@ -383,11 +419,9 @@ class CallService : Service() {
                 )
                 setOnCompletionListener {
                     release()
-                    audioFile.delete()
                     if (audioPlayer === this) audioPlayer = null
                 }
                 setOnErrorListener { _, _, _ ->
-                    audioFile.delete()
                     false
                 }
                 prepare()
@@ -412,15 +446,16 @@ class CallService : Service() {
     fun startRecording() {
         if (recording || !callActive) return
         try {
-            val audioDir = File(cacheDir, "stellarium_audio")
+            val audioDir = File(filesDir, "stellarium_audio")
             if (!audioDir.exists()) audioDir.mkdirs()
 
-            recordingFile = File(audioDir, "record_${System.currentTimeMillis()}.webm")
+            recordingFile = File(audioDir, "record_${System.currentTimeMillis()}_${(Math.random() * 100000).toInt()}.webm")
             recordingFile?.createNewFile()
 
             mediaRecorder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 MediaRecorder(applicationContext)
             } else {
+                @Suppress("DEPRECATION")
                 MediaRecorder()
             }
 
@@ -457,9 +492,9 @@ class CallService : Service() {
             recordingFile = null
 
             if (file != null && file.exists() && file.length() > 0) {
+                repo.addAudioMessage(currentCallId, "sent", file.absolutePath, file.length())
                 val data = file.readBytes()
                 webSocket?.send(okio.ByteString.of(*data))
-                file.delete()
             }
         } catch (e: Exception) {
             android.util.Log.e("CallService", "stopAndSendRecording error: ${e.message}", e)

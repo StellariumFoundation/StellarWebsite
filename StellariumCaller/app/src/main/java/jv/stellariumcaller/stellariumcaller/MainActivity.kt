@@ -1,81 +1,133 @@
 package jv.stellariumcaller.stellariumcaller
 
-import android.Manifest
-import android.content.Intent
-import android.content.pm.PackageManager
-import android.os.Build
 import android.os.Bundle
-import android.widget.Button
-import android.widget.Toast
-import androidx.activity.enableEdgeToEdge
-import androidx.activity.result.contract.ActivityResultContracts
-import androidx.appcompat.app.AppCompatActivity
-import androidx.core.content.ContextCompat
-import androidx.core.view.ViewCompat
-import androidx.core.view.WindowInsetsCompat
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Phone
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.navigation.NavType
+import androidx.navigation.compose.NavHost
+import androidx.navigation.compose.composable
+import androidx.navigation.compose.currentBackStackEntryAsState
+import androidx.navigation.compose.rememberNavController
+import androidx.navigation.navArgument
+import jv.stellariumcaller.stellariumcaller.ui.navigation.Screen
+import jv.stellariumcaller.stellariumcaller.ui.screens.CallDetailScreen
+import jv.stellariumcaller.stellariumcaller.ui.screens.CallsScreen
+import jv.stellariumcaller.stellariumcaller.ui.screens.SettingsScreen
+import jv.stellariumcaller.stellariumcaller.ui.theme.DarkBackground
+import jv.stellariumcaller.stellariumcaller.ui.theme.DarkSurface
+import jv.stellariumcaller.stellariumcaller.ui.theme.Emerald
+import jv.stellariumcaller.stellariumcaller.ui.theme.StellariumCallerTheme
 
-class MainActivity : AppCompatActivity() {
-    private var isServiceRunning = false
-
-    private val requestNotificationPermission = registerForActivityResult(
-        ActivityResultContracts.RequestPermission()
-    ) { isGranted ->
-        if (isGranted) {
-            Toast.makeText(this, "Notification permission granted", Toast.LENGTH_SHORT).show()
-        } else {
-            Toast.makeText(this, "Notification permission denied — incoming call alerts may not show", Toast.LENGTH_LONG).show()
-        }
-    }
-
+class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        enableEdgeToEdge()
-        setContentView(R.layout.activity_main)
-        ViewCompat.setOnApplyWindowInsetsListener(findViewById(R.id.main)) { v, insets ->
-            val systemBars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
-            v.setPadding(systemBars.left, systemBars.top, systemBars.right, systemBars.bottom)
-            insets
-        }
+        val repo = CallLogRepository.getInstance(applicationContext)
 
-        findViewById<Button>(R.id.btn_service_control).setOnClickListener {
-            if (isServiceRunning) {
-                stopService()
-            } else {
-                startService()
+        setContent {
+            StellariumCallerTheme {
+                MainScreen(repo)
             }
         }
+    }
+}
 
-        findViewById<Button>(R.id.btn_notification_permission).setOnClickListener {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
-                    != PackageManager.PERMISSION_GRANTED
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun MainScreen(repo: CallLogRepository) {
+    val navController = rememberNavController()
+    val navBackStackEntry by navController.currentBackStackEntryAsState()
+    val currentRoute = navBackStackEntry?.destination?.route
+
+    val showBottomBar = currentRoute in listOf(Screen.Calls.route, Screen.Settings.route)
+
+    Scaffold(
+        bottomBar = {
+            if (showBottomBar) {
+                NavigationBar(
+                    containerColor = DarkSurface,
+                    contentColor = Emerald
                 ) {
-                    requestNotificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
-                } else {
-                    Toast.makeText(this, "Notification permission already granted", Toast.LENGTH_SHORT).show()
+                    NavigationBarItem(
+                        selected = currentRoute == Screen.Calls.route,
+                        onClick = {
+                            if (currentRoute != Screen.Calls.route) {
+                                navController.navigate(Screen.Calls.route) {
+                                    popUpTo(Screen.Calls.route) { inclusive = true }
+                                }
+                            }
+                        },
+                        icon = { Icon(Icons.Default.Phone, contentDescription = "Calls") },
+                        label = { Text("Calls") },
+                        colors = NavigationBarItemDefaults.colors(
+                            selectedIconColor = Emerald,
+                            selectedTextColor = Emerald,
+                            unselectedIconColor = Color.Gray,
+                            unselectedTextColor = Color.Gray,
+                            indicatorColor = DarkSurface
+                        )
+                    )
+                    NavigationBarItem(
+                        selected = currentRoute == Screen.Settings.route,
+                        onClick = {
+                            if (currentRoute != Screen.Settings.route) {
+                                navController.navigate(Screen.Settings.route) {
+                                    popUpTo(Screen.Calls.route) { inclusive = true }
+                                }
+                            }
+                        },
+                        icon = { Icon(Icons.Default.Settings, contentDescription = "Settings") },
+                        label = { Text("Settings") },
+                        colors = NavigationBarItemDefaults.colors(
+                            selectedIconColor = Emerald,
+                            selectedTextColor = Emerald,
+                            unselectedIconColor = Color.Gray,
+                            unselectedTextColor = Color.Gray,
+                            indicatorColor = DarkSurface
+                        )
+                    )
                 }
-            } else {
-                Toast.makeText(this, "Notification permission is automatic on your Android version", Toast.LENGTH_SHORT).show()
+            }
+        },
+        containerColor = DarkBackground
+    ) { padding ->
+        NavHost(
+            navController = navController,
+            startDestination = Screen.Calls.route,
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
+        ) {
+            composable(Screen.Calls.route) {
+                CallsScreen(
+                    repo = repo,
+                    onCallClick = { callId ->
+                        navController.navigate(Screen.CallDetail.createRoute(callId))
+                    }
+                )
+            }
+            composable(
+                route = Screen.CallDetail.route,
+                arguments = listOf(navArgument("callId") { type = NavType.LongType })
+            ) { backStackEntry ->
+                val callId = backStackEntry.arguments?.getLong("callId") ?: 0L
+                CallDetailScreen(
+                    callId = callId,
+                    repo = repo,
+                    onBack = { navController.popBackStack() }
+                )
+            }
+            composable(Screen.Settings.route) {
+                SettingsScreen()
             }
         }
-
-    }
-
-    private fun startService() {
-        val serviceIntent = Intent(this, CallService::class.java)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            startForegroundService(serviceIntent)
-        } else {
-            startService(serviceIntent)
-        }
-        isServiceRunning = true
-        findViewById<Button>(R.id.btn_service_control).text = "Stop Call Service"
-    }
-
-    private fun stopService() {
-        val serviceIntent = Intent(this, CallService::class.java)
-        stopService(serviceIntent)
-        isServiceRunning = false
-        findViewById<Button>(R.id.btn_service_control).text = "Start Call Service"
     }
 }
