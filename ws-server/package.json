@@ -1,0 +1,8 @@
+{
+  "name": "stellarium-ws-server",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "bun ws-server.ts"
+  }
+}

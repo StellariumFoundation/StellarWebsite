@@ -59,7 +59,7 @@ class CallService : Service() {
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
 
     companion object {
-        private const val SERVER_URL = "wss://www.stellarium.ddns-ip.net/ws"
+        private const val SERVER_URL = "wss://stellarwebsite-ws.onrender.com/ws"
         private const val SAMPLE_RATE = 48000
         private const val CHANNELS = 1
         private const val BITRATE = 96000
