@@ -149,16 +149,26 @@ jobs:
       - name: Grant Execute Permissions for Gradle
         run: chmod +x StellariumCaller/gradlew
 
-      - name: Build StellariumCaller Debug APK
+      - name: Decode Keystore & Set Signing Env
+        run: |
+          echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > StellariumCaller/app/keystore.jks
+          echo "KEYSTORE_PATH=$GITHUB_WORKSPACE/StellariumCaller/app/keystore.jks" >> $GITHUB_ENV
+          echo "KEYSTORE_PASSWORD=${{ secrets.KEYSTORE_PASSWORD }}" >> $GITHUB_ENV
+          echo "KEY_ALIAS=${{ secrets.KEY_ALIAS }}" >> $GITHUB_ENV
+          echo "KEY_PASSWORD=${{ secrets.KEY_PASSWORD }}" >> $GITHUB_ENV
+
+      - name: Build StellariumCaller Release APK & AAB
         run: |
           cd StellariumCaller
-          ./gradlew assembleDebug
+          ./gradlew assembleRelease bundleRelease
 
       - name: Upload StellariumCaller Artifacts
         uses: actions/upload-artifact@v4
         with:
           name: stellariumcaller-artifacts
-          path: StellariumCaller/app/build/outputs/apk/debug/app-debug.apk
+          path: |
+            StellariumCaller/app/build/outputs/apk/release/app-release.apk
+            StellariumCaller/app/build/outputs/bundle/release/app-release.aab
           if-no-files-found: warn
 
   build-ios:
@@ -247,9 +257,13 @@ jobs:
           fi
 
           # StellariumCaller (owner app)
-          OWNER_APK=$(find artifacts/stellariumcaller-artifacts -name "*.apk" -type f 2>/dev/null | head -1)
+          OWNER_APK=$(find artifacts/stellariumcaller-artifacts -name "app-release.apk" -type f 2>/dev/null | head -1)
           if [ -n "$OWNER_APK" ]; then
             cp "$OWNER_APK" "release-files/Stellarium-Caller-Owner-$TAG.apk"
+          fi
+          OWNER_AAB=$(find artifacts/stellariumcaller-artifacts -name "app-release.aab" -type f 2>/dev/null | head -1)
+          if [ -n "$OWNER_AAB" ]; then
+            cp "$OWNER_AAB" "release-files/Stellarium-Caller-Owner-$TAG.aab"
           fi
 
           # iOS
@@ -274,6 +288,7 @@ jobs:
             |---|---|---|
             | 📱 Android (Capacitor) | `Stellarium-Foundation-Android-${{ steps.tag.outputs.release_tag }}.apk` | Release APK |
             | 📱 Android (Capacitor) | `Stellarium-Foundation-Android-${{ steps.tag.outputs.release_tag }}.aab` | Android App Bundle |
-            | 📱 Android (Owner) | `Stellarium-Caller-Owner-${{ steps.tag.outputs.release_tag }}.apk` | Call receiver app |
+            | 📱 Android (Owner) | `Stellarium-Caller-Owner-${{ steps.tag.outputs.release_tag }}.apk` | Release APK |
+            | 📱 Android (Owner) | `Stellarium-Caller-Owner-${{ steps.tag.outputs.release_tag }}.aab` | Android App Bundle |
             | 🍏 iOS | `Stellarium-Foundation-iOS-Simulator-${{ steps.tag.outputs.release_tag }}.zip` | Simulator build |
           files: release-files/*
