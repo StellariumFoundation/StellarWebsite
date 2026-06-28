@@ -14,15 +14,21 @@
   let callErrorText = $state('');
   let isPTT = $state(false);
   let isRecording = $state(false);
+  let micBlocked = $state(false);
+  let micHint = $state('');
 
   $effect(() => {
     const unsub1 = callClient.callState.subscribe((v) => callState = v);
     const unsub2 = callClient.errorText.subscribe((v) => callErrorText = v);
     const unsub3 = opusStream.recording.subscribe((v) => isRecording = v);
+    const unsub4 = opusStream.micBlocked.subscribe((v) => micBlocked = v);
+    const unsub5 = opusStream.micHint.subscribe((v) => micHint = v);
     return () => {
       unsub1();
       unsub2();
       unsub3();
+      unsub4();
+      unsub5();
     };
   });
 
@@ -98,6 +104,12 @@
           <span class="text-[9px] lg:text-xs text-emerald-300  uppercase tracking-widest block">Direct Voice Connection</span>
         </div>
       </div>
+
+      {#if micBlocked}
+        <div class="bg-yellow-500/10 border border-yellow-500/30 rounded-xl p-3 text-xs text-yellow-300 leading-relaxed text-left">
+          {micHint}
+        </div>
+      {/if}
 
       <p class="text-xs lg:text-sm xl:text-base text-gray-300 leading-relaxed text-left">
         Walkie-talkie voice with John Victor. Hold to talk, release to listen. Requires microphone access.

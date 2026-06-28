@@ -12,26 +12,62 @@ class OpusStream {
 
   private initializedWritable: Writable<boolean> = writable(false);
   private recordingWritable: Writable<boolean> = writable(false);
+  private micBlockedWritable: Writable<boolean> = writable(false);
+  private micHintWritable: Writable<string> = writable('');
 
   initialized: Readable<boolean> = this.initializedWritable;
   recording: Readable<boolean> = this.recordingWritable;
+  micBlocked: Readable<boolean> = this.micBlockedWritable;
+  micHint: Readable<string> = this.micHintWritable;
 
   init(): void {
     this.initializedWritable.set(true);
+  }
+
+  private isTorBrowser(): boolean {
+    try {
+      return (window as any).chrome === undefined &&
+        navigator.userAgent.includes('Firefox') &&
+        navigator.userAgent.includes('Tor');
+    } catch { return false; }
   }
 
   async initStream(): Promise<void> {
     if (this.mediaStream) return;
 
     const supported = PREFERRED_TYPES.find(t => MediaRecorder.isTypeSupported(t));
-    if (!supported) throw new Error('No supported audio MIME type');
+    if (!supported) {
+      this.micBlockedWritable.set(true);
+      this.micHintWritable.set('Your browser does not support audio recording.');
+      return;
+    }
     this.selectedMimeType = supported;
 
-    if (typeof navigator.mediaDevices?.getUserMedia !== 'function') throw new Error('getUserMedia not available');
+    if (typeof navigator.mediaDevices?.getUserMedia !== 'function') {
+      this.micBlockedWritable.set(true);
+      if (this.isTorBrowser()) {
+        this.micHintWritable.set('Click the shield icon in the URL bar → set Security Level to "Standard" to enable microphone access.');
+      } else if (typeof navigator.mediaDevices === 'undefined') {
+        this.micHintWritable.set('Microphone access is blocked by your browser. Use HTTPS and a supported browser (Chrome, Firefox, Edge).');
+      } else {
+        this.micHintWritable.set('Microphone API unavailable in this browser.');
+      }
+      return;
+    }
 
-    this.mediaStream = await navigator.mediaDevices.getUserMedia({
-      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }
-    });
+    try {
+      this.mediaStream = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }
+      });
+    } catch (e: any) {
+      this.micBlockedWritable.set(true);
+      if (e.name === 'NotAllowedError' || e.name === 'PermissionDeniedError') {
+        this.micHintWritable.set('Microphone permission denied. Allow mic access in your browser settings, then refresh.');
+      } else {
+        this.micHintWritable.set('Could not access microphone: ' + e.message);
+      }
+      return;
+    }
 
     this.mediaRecorder = new MediaRecorder(this.mediaStream, {
       mimeType: this.selectedMimeType,
